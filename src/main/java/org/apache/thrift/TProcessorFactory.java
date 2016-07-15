@@ -22,6 +22,7 @@ package org.apache.thrift;
 import org.apache.thrift.transport.TTransport;
 
 /**
+ * 默认的processor 工厂,单例实例
  * The default processor factory just returns a singleton
  * instance.
  */

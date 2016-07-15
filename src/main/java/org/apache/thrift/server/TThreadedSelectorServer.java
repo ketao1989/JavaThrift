@@ -19,6 +19,12 @@
 
 package org.apache.thrift.server;
 
+import org.apache.thrift.transport.TNonblockingServerTransport;
+import org.apache.thrift.transport.TNonblockingTransport;
+import org.apache.thrift.transport.TTransportException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -37,29 +43,22 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.thrift.transport.TNonblockingServerTransport;
-import org.apache.thrift.transport.TNonblockingTransport;
-import org.apache.thrift.transport.TTransportException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 /**
- * A Half-Sync/Half-Async server with a separate pool of threads to handle
- * non-blocking I/O. Accepts are handled on a single thread, and a configurable
- * number of nonblocking selector threads manage reading and writing of client
- * connections. A synchronous worker thread pool handles processing of requests.
- * 
- * Performs better than TNonblockingServer/THsHaServer in multi-core
- * environments when the the bottleneck is CPU on the single selector thread
- * handling I/O. In addition, because the accept handling is decoupled from
- * reads/writes and invocation, the server has better ability to handle back-
- * pressure from new connections (e.g. stop accepting when busy).
- * 
- * Like TNonblockingServer, it relies on the use of TFramedTransport.
+ * 一个半同步/半异步服务器,通过一个独立的线程池来处理非阻塞I/O.使用单个线程来处理Accept请求,然后
+ * 一个配置数量的非阻塞selector线程来管理客户端过来的read和write操作.然后,一个同步worker线程池来处理请求的流程.
+ *
+ * TNonblockingServer 是单个线程selector模式处理连接非阻塞I/O的.
+ *
+ * 在多核环境下,由于基于单个selector线程处理I/O时,CPU会是一个瓶颈,所以TThreadedSelectorServer性能比TNonblockingServer/THsHaServer好.
+ * 此外,由于accept处理 和 read/write调用解耦,server可以有更好的能力处理新的连接压力(比如服务繁忙的时候停止accept).
+ *
+ * 和 TNonblockingServer 一样,底层必须使用 TFramedTransport 传输协议
  */
 public class TThreadedSelectorServer extends AbstractNonblockingServer {
+
   private static final Logger LOGGER = LoggerFactory.getLogger(TThreadedSelectorServer.class.getName());
 
+  // 配置信息
   public static class Args extends AbstractNonblockingServerArgs<Args> {
 
     /** The number of threads for selecting on already-accepted connections */
@@ -73,16 +72,17 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     /** Time to wait for server to stop gracefully */
     private int stopTimeoutVal = 60;
     private TimeUnit stopTimeoutUnit = TimeUnit.SECONDS;
-    /** The ExecutorService for handling dispatched requests */
+    /** 分发请求的线程池 The ExecutorService for handling dispatched requests */
     private ExecutorService executorService = null;
     /**
+     * selector 线程池的队列大小
      * The size of the blocking queue per selector thread for passing accepted
      * connections to the selector thread
      */
     private int acceptQueueSizePerThread = 4;
 
     /**
-     * Determines the strategy for handling new accepted connections.
+     * 处理新accepted连接的策略 Determines the strategy for handling new accepted connections.
      */
     public static enum AcceptPolicy {
       /**
@@ -90,12 +90,12 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
        * If the worker pool is saturated, further accepts will be closed
        * immediately. Slightly increases latency due to an extra scheduling.
        */
-      FAIR_ACCEPT,
+      FAIR_ACCEPT, //如果worker池饱和了,则更多地accept将会快速被关闭.
       /**
        * Handle the accepts as fast as possible, disregarding the status of the
        * executor service.
        */
-      FAST_ACCEPT
+      FAST_ACCEPT // 快速处理,不管线程池的任务异常
     }
 
     private AcceptPolicy acceptPolicy = AcceptPolicy.FAST_ACCEPT;
@@ -178,17 +178,15 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
         throw new IllegalArgumentException("acceptQueueSizePerThread must be positive.");
       }
     }
-  }
+  } // END Args
 
   // The thread handling all accepts
-  private AcceptThread acceptThread;
+  private AcceptThread acceptThread;// 单个accept线程,处理所有accept请求
 
   // Threads handling events on client transports
   private final Set<SelectorThread> selectorThreads = new HashSet<SelectorThread>();
 
-  // This wraps all the functionality of queueing and thread pool management
-  // for the passing of Invocations from the selector thread(s) to the workers
-  // (if any).
+  //封装所有的入队函数,以及为提供将invocation从selector线程传递到worker线程的线程池管理
   private final ExecutorService invoker;
 
   private final Args args;

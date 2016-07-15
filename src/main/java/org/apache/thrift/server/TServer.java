@@ -149,7 +149,7 @@ public abstract class TServer {
    * Stop the server. This is optional on a per-implementation basis. Not
    * all servers are required to be cleanly stoppable.
    */
-  public void stop() {}
+  public void stop() {} // 在停止之前需要清理工作,则重写这个方法
 
   public boolean isServing() {
     return isServing;

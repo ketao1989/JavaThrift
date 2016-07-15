@@ -19,15 +19,6 @@
 
 package org.apache.thrift.server;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.spi.SelectorProvider;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
-
 import org.apache.thrift.TAsyncProcessor;
 import org.apache.thrift.TByteArrayOutputStream;
 import org.apache.thrift.TException;
@@ -42,9 +33,17 @@ import org.apache.thrift.transport.TTransportException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.spi.SelectorProvider;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
- * Provides common methods and classes used by nonblocking TServer
- * implementations.
+ * 为非阻塞TServer实现提供公共的方法和类
  */
 public abstract class AbstractNonblockingServer extends TServer {
   protected final Logger LOGGER = LoggerFactory.getLogger(getClass().getName());
@@ -54,7 +53,7 @@ public abstract class AbstractNonblockingServer extends TServer {
 
     public AbstractNonblockingServerArgs(TNonblockingServerTransport transport) {
       super(transport);
-      transportFactory(new TFramedTransport.Factory());
+      transportFactory(new TFramedTransport.Factory());//设置输入输出传输协议
     }
   }
 
@@ -63,10 +62,10 @@ public abstract class AbstractNonblockingServer extends TServer {
    * time. Without this limit, the server will gladly allocate client buffers
    * right into an out of memory exception, rather than waiting.
    */
-  final long MAX_READ_BUFFER_BYTES;
+  final long MAX_READ_BUFFER_BYTES;//一次分配给IO缓存的最大数量;不设置size,则会一直分配内存直到内存异常
 
   /**
-   * How many bytes are currently allocated to read buffers.
+   * 当前已经分配给read 缓存 多少字节
    */
   final AtomicLong readBufferBytesAllocated = new AtomicLong(0);
 
@@ -79,24 +78,26 @@ public abstract class AbstractNonblockingServer extends TServer {
    * Begin accepting connections and processing invocations.
    */
   public void serve() {
-    // start any IO threads
+    // 1. 启动各个IO线程
     if (!startThreads()) {
       return;
     }
 
-    // start listening, or exit
+    // 2.启动socket 监听listening
     if (!startListening()) {
       return;
     }
 
+    // 3. 设置服务可用
     setServing(true);
 
-    // this will block while we serve
+    // 4. block 直到结束
     waitForShutdown();
 
+    // 5. 设置服务不可用
     setServing(false);
 
-    // do a little cleanup
+    // 6. 停止socket,关闭监听listening
     stopListening();
   }
 
@@ -137,6 +138,8 @@ public abstract class AbstractNonblockingServer extends TServer {
   }
 
   /**
+   * 执行一个调用.这个方法表现为多个不同方式--直接调用,队列分离执行等.
+   *
    * Perform an invocation. This method could behave several different ways -
    * invoke immediately inline, queue for separate execution, etc.
    * 
@@ -152,13 +155,15 @@ public abstract class AbstractNonblockingServer extends TServer {
    * corresponding to requests.
    */
   protected abstract class AbstractSelectThread extends Thread {
-    protected final Selector selector;
+
+    protected final Selector selector;//selector nio
 
     // List of FrameBuffers that want to change their selection interests.
+    // 需要更改selection interest 的FrameBuffers列表(FrameBuffers包括所有通信信息)
     protected final Set<FrameBuffer> selectInterestChanges = new HashSet<FrameBuffer>();
 
     public AbstractSelectThread() throws IOException {
-      this.selector = SelectorProvider.provider().openSelector();
+      this.selector = SelectorProvider.provider().openSelector();//开启一个nio selector
     }
 
     /**
@@ -182,6 +187,8 @@ public abstract class AbstractNonblockingServer extends TServer {
     }
 
     /**
+     * 更改 selection interest key 从 read 到 write 模式.
+     *
      * Check to see if there are any FrameBuffers that have switched their
      * interest type from read to write or vice versa.
      */
