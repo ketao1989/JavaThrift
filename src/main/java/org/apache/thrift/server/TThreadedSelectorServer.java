@@ -303,7 +303,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     Runnable invocation = getRunnable(frameBuffer);
     if (invoker != null) {
       try {
-        invoker.execute(invocation);//线程池执行具体的调研
+        invoker.execute(invocation);//worker线程池执行具体的调研
         return true;
       } catch (RejectedExecutionException rx) {
         LOGGER.warn("ExecutorService rejected execution!", rx);
@@ -322,7 +322,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
   }
 
   /**
-   * Helper to create the invoker if one is not specified
+   * 创建worker的线程池
    */
   protected static ExecutorService createDefaultExecutor(Args options) {
     return (options.workerThreads > 0) ? Executors.newFixedThreadPool(options.workerThreads) : null;

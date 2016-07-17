@@ -532,6 +532,7 @@ public abstract class AbstractNonblockingServer extends TServer {
     /**
      * Actually invoke the method signified by this FrameBuffer.
      * buffer实际调用方法.
+     * TODO 由于可能时线程池调用,所以在执行完成之后,需要主动调用responseReady返回响应数据
      */
     public void invoke() {
       frameTrans_.reset(buffer_.array());//重置pos
