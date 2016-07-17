@@ -51,6 +51,7 @@ public abstract class ProcessFunction<I, T extends TBase> {
     }
 
     if(!isOneway()) {
+      // 对于有返回的请求,需要把seqid写入,在client端会check id 是否和请求的一致
       oprot.writeMessageBegin(new TMessage(getMethodName(), TMessageType.REPLY, seqid));
       result.write(oprot);
       oprot.writeMessageEnd();

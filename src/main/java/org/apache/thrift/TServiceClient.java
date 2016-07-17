@@ -73,6 +73,10 @@ public abstract class TServiceClient {
     oprot_.getTransport().flush();
   }
 
+  /**
+   * 这里在接收消息的时候,会check type是否时异常,以及seqid是否和请求时一致.
+   * 该方法调用,在 thrift 为我们生成的client内
+   */
   protected void receiveBase(TBase<?,?> result, String methodName) throws TException {
     TMessage msg = iprot_.readMessageBegin();
     if (msg.type == TMessageType.EXCEPTION) {
