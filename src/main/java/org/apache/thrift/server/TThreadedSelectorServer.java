@@ -59,6 +59,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
   private static final Logger LOGGER = LoggerFactory.getLogger(TThreadedSelectorServer.class.getName());
 
   // 配置信息
+  // 增加了worker线程池,并且selector线程个数增加
   public static class Args extends AbstractNonblockingServerArgs<Args> {
 
     /** The number of threads for selecting on already-accepted connections */
@@ -202,8 +203,8 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
   }
 
   /**
-   * Start the accept and selector threads running to deal with clients.
-   * 
+   * 启动accept线程 和 selector线程处理clients请求.先启动selector线程,然后accept线程启动开始接受外部连接
+   *
    * @return true if everything went ok, false if we couldn't start for some
    *         reason.
    */
@@ -214,11 +215,11 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
         selectorThreads.add(new SelectorThread(args.acceptQueueSizePerThread));
       }
       acceptThread = new AcceptThread((TNonblockingServerTransport) serverTransport_,
-        createSelectorThreadLoadBalancer(selectorThreads));
+        createSelectorThreadLoadBalancer(selectorThreads));//RR轮询selectorThreads
       for (SelectorThread thread : selectorThreads) {
         thread.start();
       }
-      acceptThread.start();
+      acceptThread.start();//启动accept和selector线程
       return true;
     } catch (IOException e) {
       LOGGER.error("Failed to start threads!", e);
@@ -240,6 +241,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     gracefullyShutdownInvokerPool();
   }
 
+  // 等待所有启动的线程执行完成,再退出
   protected void joinThreads() throws InterruptedException {
     // wait until the io threads exit
     acceptThread.join();
@@ -256,7 +258,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     stopped_ = true;
 
     // Stop queuing connect attempts asap
-    stopListening();
+    stopListening(); // 停止监听socket,也就是停止新的connect入队
 
     if (acceptThread != null) {
       acceptThread.wakeupSelector();
@@ -271,7 +273,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
 
   protected void gracefullyShutdownInvokerPool() {
     // try to gracefully shut down the executor service
-    invoker.shutdown();
+    invoker.shutdown();//关闭连接池
 
     // Loop until awaitTermination finally does return without a interrupted
     // exception. If we don't do this, then we'll shut down prematurely. We want
@@ -301,7 +303,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     Runnable invocation = getRunnable(frameBuffer);
     if (invoker != null) {
       try {
-        invoker.execute(invocation);
+        invoker.execute(invocation);//线程池执行具体的调研
         return true;
       } catch (RejectedExecutionException rx) {
         LOGGER.warn("ExecutorService rejected execution!", rx);
@@ -309,11 +311,12 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
       }
     } else {
       // Invoke on the caller's thread
-      invocation.run();
+      invocation.run();//不使用线程池,则对象线程自己执行invoke
       return true;
     }
   }
 
+  // 直接封装buffer的invoke为一个runnable对象
   protected Runnable getRunnable(FrameBuffer frameBuffer) {
     return new Invocation(frameBuffer);
   }
@@ -334,6 +337,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
   }
 
   /**
+   * 该线程是接收服务器transport连接,然后交给IO selector线程池来处理
    * The thread that selects on the server transport (listen socket) and accepts
    * new connections to hand off to the IO selector threads
    */
@@ -343,7 +347,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     private final TNonblockingServerTransport serverTransport;
     private final Selector acceptSelector;
 
-    private final SelectorThreadLoadBalancer threadChooser;
+    private final SelectorThreadLoadBalancer threadChooser;//从selector池子里 RR 选出一个 selector来
 
     /**
      * Set up the AcceptThead
@@ -366,7 +370,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     public void run() {
       try {
         if (eventHandler_ != null) {
-          eventHandler_.preServe();
+          eventHandler_.preServe(); // 自定义预处理方法
         }
 
         while (!stopped_) {
@@ -393,6 +397,8 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     }
 
     /**
+     * select 然后处理IO事件
+     *
      * Select and process IO events appropriately: If there are connections to
      * be accepted, accept them.
      */
@@ -412,6 +418,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
             continue;
           }
 
+          // 只处理 accept相关的事件
           if (key.isAcceptable()) {
             handleAccept();
           } else {
@@ -424,22 +431,22 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     }
 
     /**
-     * Accept a new connection.
+     * 接收一个新的 connection.
      */
     private void handleAccept() {
-      final TNonblockingTransport client = doAccept();
+      final TNonblockingTransport client = doAccept();//调用transport的accept方法
       if (client != null) {
         // Pass this connection to a selector thread
-        final SelectorThread targetThread = threadChooser.nextThread();
+        final SelectorThread targetThread = threadChooser.nextThread();//选出一个selector线程
 
         if (args.acceptPolicy == Args.AcceptPolicy.FAST_ACCEPT || invoker == null) {
-          doAddAccept(targetThread, client);
+          doAddAccept(targetThread, client);// 加入到selector的queue中
         } else {
           // FAIR_ACCEPT
           try {
             invoker.submit(new Runnable() {
               public void run() {
-                doAddAccept(targetThread, client);
+                doAddAccept(targetThread, client);//交给线程池处理,如果queue已满,则关闭client连接
               }
             });
           } catch (RejectedExecutionException rx) {
@@ -461,6 +468,7 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
       }
     }
 
+    // accept事件加入到accepted连接的队列中
     private void doAddAccept(SelectorThread thread, TNonblockingTransport client) {
       if (!thread.addAcceptedConnection(client)) {
         client.close();
@@ -525,11 +533,12 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
         LOGGER.warn("Interrupted while adding accepted connection!", e);
         return false;
       }
-      selector.wakeup();
+      selector.wakeup();//唤醒吹
       return true;
     }
 
     /**
+     * 工作的主流程逻辑.处理 读写IO/分发 ,以及管理selection选择
      * The work loop. Handles selecting (read/write IO), dispatching, and
      * managing the selection preferences of all existing connections.
      */
@@ -579,9 +588,10 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
             continue;
           }
 
+          // 这里只selector的读写事件,accept事件由单独线程处理
           if (key.isReadable()) {
             // deal with reads
-            handleRead(key);
+            handleRead(key);//读处理,则会调用方法
           } else if (key.isWritable()) {
             // deal with writes
             handleWrite(key);
@@ -595,13 +605,13 @@ public class TThreadedSelectorServer extends AbstractNonblockingServer {
     }
 
     private void processAcceptedConnections() {
-      // Register accepted connections
+      // 注册 accepted connections
       while (!stopped_) {
         TNonblockingTransport accepted = acceptedQueue.poll();
         if (accepted == null) {
           break;
         }
-        registerAccepted(accepted);
+        registerAccepted(accepted);// 注册读事件,绑定framebuffer 到 attach
       }
     }
 

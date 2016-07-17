@@ -29,6 +29,10 @@ import java.nio.channels.SelectionKey;
 import java.util.Iterator;
 
 /**
+ * 一个非阻塞 TServers的实现.允许所有连接的client公平调用.
+ *
+ * 该server内部时单个线程.如果你想要一个有限的线程池绑定到公平调用,参考THsHaServer
+ *
  * A nonblocking TServer implementation. This allows for fairness amongst all
  * connected clients in terms of invocations.
  *
@@ -47,6 +51,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
     }
   }
 
+  // 自定义的select线程,处理accept操作
   private SelectAcceptThread selectAcceptThread_;
 
   public TNonblockingServer(AbstractNonblockingServerArgs args) {
@@ -55,7 +60,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
 
 
   /**
-   * Start the selector thread to deal with accepts and client messages.
+   * 开始selector线程处理accept和client消息
    *
    * @return true if everything went ok, false if we couldn't start for some
    * reason.
@@ -64,6 +69,8 @@ public class TNonblockingServer extends AbstractNonblockingServer {
   protected boolean startThreads() {
     // start the selector
     try {
+      // 构建 thread,serverTransport_由用户使用
+      // TNonblockingServerTransport serverTransport = new TNonblockingServerSocket(8888);
       selectAcceptThread_ = new SelectAcceptThread((TNonblockingServerTransport)serverTransport_);
       selectAcceptThread_.start();
       return true;
@@ -84,7 +91,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
   protected void joinSelector() {
     // wait until the selector thread exits
     try {
-      selectAcceptThread_.join();
+      selectAcceptThread_.join();//等待线程执行完了之后,才退出
     } catch (InterruptedException e) {
       // for now, just silently ignore. technically this means we'll have less of
       // a graceful shutdown as a result.
@@ -98,7 +105,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
   public void stop() {
     stopped_ = true;
     if (selectAcceptThread_ != null) {
-      selectAcceptThread_.wakeupSelector();
+      selectAcceptThread_.wakeupSelector();//唤醒selector
     }
   }
 
@@ -108,7 +115,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
    */
   @Override
   protected boolean requestInvoke(FrameBuffer frameBuffer) {
-    frameBuffer.invoke();
+    frameBuffer.invoke();//直接调用父类的invoke方法,默认执行自定义context,然后执行processor
     return true;
   }
 
@@ -118,6 +125,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
   }
 
   /**
+   * 该线程做所有的selecting,管理新连接等等工作,还包括read操作.
    * The thread that will be doing all the selecting, managing new connections
    * and those that still need to be read.
    */
@@ -133,7 +141,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
     public SelectAcceptThread(final TNonblockingServerTransport serverTransport)
     throws IOException {
       this.serverTransport = serverTransport;
-      serverTransport.registerSelector(selector);
+      serverTransport.registerSelector(selector);//初始化的时候,在transport上注册selector
     }
 
     public boolean isStopped() {
@@ -141,27 +149,26 @@ public class TNonblockingServer extends AbstractNonblockingServer {
     }
 
     /**
-     * The work loop. Handles both selecting (all IO operations) and managing
-     * the selection preferences of all existing connections.
+     * 工作循环操作.处理selecting(所有IO操作)和管理所有连接的selection选择.
      */
     public void run() {
       try {
         if (eventHandler_ != null) {
-          eventHandler_.preServe();
+          eventHandler_.preServe();//自定义,每个连接执行一次
         }
 
         while (!stopped_) {
-          select();
-          processInterestChanges();
+          select();// Select,然后处理合适的IO事件
+          processInterestChanges();// 更新各种buffer状态
         }
         for (SelectionKey selectionKey : selector.keys()) {
-          cleanupSelectionKey(selectionKey);
+          cleanupSelectionKey(selectionKey); // 各种退出前的清理操作
         }
       } catch (Throwable t) {
         LOGGER.error("run() exiting due to uncaught error", t);
       } finally {
         try {
-          selector.close();
+          selector.close(); //close操作
         } catch (IOException e) {
           LOGGER.error("Got an IOException while closing selector!", e);
         }
@@ -180,9 +187,10 @@ public class TNonblockingServer extends AbstractNonblockingServer {
     private void select() {
       try {
         // wait for io events.
-        selector.select();
+        selector.select(); // 等待io事件
 
         // process the io events we received
+        // 下面时标准的selector server 处理流程
         Iterator<SelectionKey> selectedKeys = selector.selectedKeys().iterator();
         while (!stopped_ && selectedKeys.hasNext()) {
           SelectionKey key = selectedKeys.next();
@@ -213,6 +221,9 @@ public class TNonblockingServer extends AbstractNonblockingServer {
       }
     }
 
+    /**
+     * 创建一个thrift内部流转的TDO FrameBuffer对象
+     */
     protected FrameBuffer createFrameBuffer(final TNonblockingTransport trans,
         final SelectionKey selectionKey,
         final AbstractSelectThread selectThread) {
@@ -222,7 +233,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
     }
 
     /**
-     * Accept a new connection.
+     * 接受一个新的 connection.
      */
     private void handleAccept() throws IOException {
       SelectionKey clientKey = null;
@@ -235,6 +246,7 @@ public class TNonblockingServer extends AbstractNonblockingServer {
         // add this key to the map
           FrameBuffer frameBuffer = createFrameBuffer(client, clientKey, SelectAcceptThread.this);
 
+        // 这里将创建好的buffer attach 到 selection key的属性上
           clientKey.attach(frameBuffer);
       } catch (TTransportException tte) {
         // something went wrong accepting.
